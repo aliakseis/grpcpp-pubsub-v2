@@ -68,3 +68,11 @@ target_link_libraries(PublishSubscribeClient
                       ${GRPC_CPP_LIB}
                       ${Protobuf_LIBRARIES})
 
+add_executable(PublishSubscribeNotifier
+               notifier/PublishSubscribeNotifier.cpp
+               ${PROTO_SRCS}
+               ${GRPC_SRCS})
+target_include_directories(PublishSubscribeNotifier PRIVATE ./notifier ./common)
+target_link_libraries(PublishSubscribeNotifier
+                      ${GRPC_CPP_LIB}
+                      ${Protobuf_LIBRARIES})

@@ -1,3 +1,114 @@
+
+#include <grpcpp/grpcpp.h>
+#include <grpc/support/log.h>
+
+#include "PublishSubscribe.grpc.pb.h"
+
+#include <iostream>
+#include <memory>
+#include <string>
+#include <cassert>
+
+
+using grpc::Channel;
+using grpc::ClientAsyncResponseReader;
+using grpc::ClientContext;
+using grpc::CompletionQueue;
+using grpc::Status;
+
+// https://habr.com/ru/post/340758/
+// https://github.com/Mityuha/grpc_async/blob/master/grpc_async_client.cc
+
+
+class AsyncClientCall1M 
+{
+    ClientContext context;
+    PublishSubscribe::Notification reply;
+    Status status{};
+    enum CallStatus { PROCESS, FINISH, DESTROY } callStatus;
+    std::unique_ptr< grpc::ClientAsyncReader<PublishSubscribe::Notification> > responder;
+
+public:
+    AsyncClientCall1M(const PublishSubscribe::NotificationChannel& request, 
+        CompletionQueue& cq_, 
+        std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub>& stub_)// :AbstractAsyncClientCall()
+    {
+        std::cout << "[Proceed1M]: new client 1-M" << std::endl;
+        responder = stub_->AsyncSubscribe(&context, request, &cq_, (void*)this);
+        callStatus = PROCESS;
+    }
+    void Proceed(bool ok = true)
+    {
+        if (callStatus == PROCESS)
+        {
+            if (!ok)
+            {
+                responder->Finish(&status, (void*)this);
+                callStatus = FINISH;
+                return;
+            }
+            responder->Read(&reply, (void*)this);
+            //printReply("Proceed1M");
+        }
+        else if (callStatus == FINISH)
+        {
+            std::cout << "[Proceed1M]: Good Bye" << std::endl;
+            delete this;
+        }
+        //return;
+    }
+};
+
+
+class GreeterClient
+{
+public:
+    explicit GreeterClient(std::shared_ptr<Channel> channel, const std::string& id)
+        :stub_(PublishSubscribe::NotificationSubscriber::NewStub(channel))
+    {
+        GladToSeeMe(id);
+    }
+
+
+
+    void GladToSeeMe(const std::string& id)
+    {
+        PublishSubscribe::NotificationChannel request;
+        request.set_id(id);
+        new AsyncClientCall1M(request, cq_, stub_);
+    }
+
+
+
+    void AsyncCompleteRpc()
+    {
+        void* got_tag;
+        bool ok = false;
+        while (cq_.Next(&got_tag, &ok))
+        {
+            AsyncClientCall1M* call = static_cast<AsyncClientCall1M*>(got_tag);
+            call->Proceed(ok);
+        }
+        std::cout << "Completion queue is shutting down." << std::endl;
+    }
+
+private:
+    // Out of the passed in Channel comes the stub, stored here, our view of the
+    // server's exposed services.
+    std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub> stub_;
+
+    // The producer-consumer queue we use to communicate asynchronously with the
+    // gRPC runtime.
+    CompletionQueue cq_;
+};
+
+
+
 int main()
 {
+    GreeterClient greeter(grpc::CreateChannel("localhost:50051", grpc::InsecureChannelCredentials()), "42");
+    std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
+    thread_.join();
+
+    return 0;
 }

@@ -2,11 +2,7 @@
 #include <grpc/support/log.h>
 #include <grpcpp/alarm.h>
 
-#ifdef BAZEL_BUILD
-#include "examples/protos/PublishSubscribe.grpc.pb.h"
-#else
 #include "PublishSubscribe.grpc.pb.h"
-#endif
 
 #include "Delegate.h"
 
