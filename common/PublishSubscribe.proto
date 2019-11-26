@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+
+package PublishSubscribe;
+
+import "google/protobuf/empty.proto";
+
+
+service NotificationObserver {
+	rpc Notify(stream Notification) returns (google.protobuf.Empty) {}
+}
+
+service NotificationSubscriber {
+	rpc Subscribe(NotificationChannel) returns (stream Notification) {}
+}
+
+message Notification {
+	string content = 1;
+}
+
+message NotificationChannel {
+	string id = 1;
+}
