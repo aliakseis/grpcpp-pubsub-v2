@@ -99,11 +99,19 @@ private:
 
                 parent_->observer_(request_);
 
+                // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
+                status_ = PUSH_TO_BACK;
+
                 // And we are done! Let the gRPC runtime know we've finished, using the
                 // memory address of this instance as the uniquely identifying tag for
                 // the event.
                 //status_ = FINISH;
                 //responder_.Finish(reply_, Status::OK, this);
+            }
+            else if (status_ == PUSH_TO_BACK)
+            {
+                status_ = PROCESS;
+                alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
             }
             else {
                 GPR_ASSERT(status_ == FINISH);
@@ -137,8 +145,10 @@ private:
         grpc::ServerAsyncReader<google::protobuf::Empty, PublishSubscribe::Notification> responder_;
 
         // Let's implement a tiny state machine with the following states.
-        enum CallStatus { CREATE, PROCESS, FINISH };
+        enum CallStatus { CREATE, PROCESS, FINISH, PUSH_TO_BACK };
         CallStatus status_;  // The current serving state.
+
+        grpc::Alarm alarm_;
     };
 
 
@@ -199,13 +209,16 @@ private:
                     response_ = fifo_.front();
                     fifo_.pop_front();
                     responder_.Write(response_, this);
+
+                    // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
+                    status_ = PUSH_TO_BACK;
                 }
                 else
                 {
                     // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
-                    grpc::Alarm alarm;
-                    alarm.Set(parent_->cq_.get(), std::chrono::system_clock::now(), this);
-                    //alarm.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                    //grpc::Alarm alarm;
+                    //alarm.Set(parent_->cq_.get(), std::chrono::system_clock::now(), this);
+                    alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
                 }
 
                 // And we are done! Let the gRPC runtime know we've finished, using the
@@ -213,6 +226,11 @@ private:
                 // the event.
                 //status_ = FINISH;
                 //responder_.Finish(reply_, Status::OK, this);
+            }
+            else if (status_ == PUSH_TO_BACK)
+            {
+                status_ = PROCESS;
+                alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
             }
             else {
                 GPR_ASSERT(status_ == FINISH);
@@ -252,12 +270,14 @@ private:
         grpc::ServerAsyncWriter<PublishSubscribe::Notification> responder_;
 
         // Let's implement a tiny state machine with the following states.
-        enum CallStatus { CREATE, PROCESS, FINISH };
+        enum CallStatus { CREATE, PROCESS, FINISH, PUSH_TO_BACK };
         CallStatus status_;  // The current serving state.
 
         bool connected_ = false;
 
         std::deque<PublishSubscribe::Notification> fifo_;
+
+        grpc::Alarm alarm_;
     };
 
 
