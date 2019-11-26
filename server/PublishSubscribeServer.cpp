@@ -204,8 +204,8 @@ private:
                 {
                     // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
                     grpc::Alarm alarm;
-                    //alarm.Set(parent_->cq_.get(), std::chrono::system_clock::now(), this);
-                    alarm.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                    alarm.Set(parent_->cq_.get(), std::chrono::system_clock::now(), this);
+                    //alarm.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
                 }
 
                 // And we are done! Let the gRPC runtime know we've finished, using the
@@ -277,7 +277,7 @@ private:
             // The return value of Next should always be checked. This return value
             // tells us whether there is any kind of event or cq_ is shutting down.
             GPR_ASSERT(cq_->Next(&tag, &ok));
-            GPR_ASSERT(ok);
+            //GPR_ASSERT(ok);
             static_cast<CallData*>(tag)->Proceed();
         }
     }
