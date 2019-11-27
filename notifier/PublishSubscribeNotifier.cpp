@@ -4,10 +4,15 @@
 
 #include "PublishSubscribe.grpc.pb.h"
 
+#include "Delegate.h"
+
 #include <iostream>
 #include <memory>
 #include <string>
 #include <cassert>
+
+#include <signal.h>
+#include <boost/signals2/signal.hpp>
 
 
 using grpc::Channel;
@@ -15,6 +20,29 @@ using grpc::ClientAsyncResponseReader;
 using grpc::ClientContext;
 using grpc::CompletionQueue;
 using grpc::Status;
+
+
+boost::signals2::signal<void(void)> terminator;
+
+void signalHandler(int signo)
+{
+    terminator();
+}
+
+
+void setSignalHandler()
+{
+#ifdef _WIN32
+    signal(SIGINT, signalHandler);
+#else
+    struct sigaction sa;
+    sa.sa_handler = signalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+#endif
+}
+
 
 // https://habr.com/ru/post/340758/
 // https://github.com/Mityuha/grpc_async/blob/master/grpc_async_client.cc
@@ -36,18 +64,29 @@ public:
     {
         std::cout << "[ProceedM1]: new client M-1" << std::endl;
         responder = stub_->AsyncNotify(&context, &reply, &cq_, this);
+        terminator.connect(MakeDelegate<&ClientContext::TryCancel>(&context));
         callStatus = PROCESS;
+    }
+    ~AsyncClientCallM1()
+    {
+        terminator.disconnect(MakeDelegate<&ClientContext::TryCancel>(&context));
     }
     void Proceed(bool ok = true)
     {
         if (callStatus == PROCESS)
         {
+            if (!ok)
+            {
+                responder->Finish(&status, this);
+                callStatus = FINISH;
+                return;
+            }
             if (writing_mode_)
             {
                 request.set_content(std::to_string(mcounter));
                 responder->Write(request, this);
                 ++mcounter;
-                std::cout << request.content() << ' ';
+                std::cout << request.content() << ',';
             }
             else//reading mode
             {
