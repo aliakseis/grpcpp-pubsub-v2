@@ -31,10 +31,10 @@ class AsyncClientCall1M
 public:
     AsyncClientCall1M(const PublishSubscribe::NotificationChannel& request, 
         CompletionQueue& cq_, 
-        std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub>& stub_)// :AbstractAsyncClientCall()
+        std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub>& stub_)
     {
         std::cout << "[Proceed1M]: new client 1-M" << std::endl;
-        responder = stub_->AsyncSubscribe(&context, request, &cq_, (void*)this);
+        responder = stub_->AsyncSubscribe(&context, request, &cq_, this);
         callStatus = PROCESS;
     }
     void Proceed(bool ok = true)
@@ -43,19 +43,18 @@ public:
         {
             if (!ok)
             {
-                responder->Finish(&status, (void*)this);
+                responder->Finish(&status, this);
                 callStatus = FINISH;
                 return;
             }
-            responder->Read(&reply, (void*)this);
-            //printReply("Proceed1M");
+            responder->Read(&reply, this);
+            std::cout << reply.content() << ',';
         }
         else if (callStatus == FINISH)
         {
             std::cout << "[Proceed1M]: Good Bye" << std::endl;
             delete this;
         }
-        //return;
     }
 };
 
@@ -70,14 +69,12 @@ public:
     }
 
 
-
     void GladToSeeMe(const std::string& id)
     {
         PublishSubscribe::NotificationChannel request;
         request.set_id(id);
         new AsyncClientCall1M(request, cq_, stub_);
     }
-
 
 
     void AsyncCompleteRpc()

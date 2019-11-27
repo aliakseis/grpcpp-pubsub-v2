@@ -22,6 +22,7 @@ using grpc::Status;
 class AsyncClientCallM1
 {
     ClientContext context;
+    PublishSubscribe::Notification request;
     ::google::protobuf::Empty reply;
     Status status{};
     enum CallStatus { PROCESS, FINISH, DESTROY } callStatus;
@@ -30,11 +31,11 @@ class AsyncClientCallM1
     bool writing_mode_;
 
 public:
-    AsyncClientCallM1(CompletionQueue& cq_, std::unique_ptr<PublishSubscribe::NotificationObserver::Stub>& stub_) :
-        mcounter(0), writing_mode_(true)
+    AsyncClientCallM1(CompletionQueue& cq_, std::unique_ptr<PublishSubscribe::NotificationObserver::Stub>& stub_) 
+        : mcounter(0), writing_mode_(true)
     {
         std::cout << "[ProceedM1]: new client M-1" << std::endl;
-        responder = stub_->AsyncNotify(&context, &reply, &cq_, (void*)this);
+        responder = stub_->AsyncNotify(&context, &reply, &cq_, this);
         callStatus = PROCESS;
     }
     void Proceed(bool ok = true)
@@ -43,34 +44,20 @@ public:
         {
             if (writing_mode_)
             {
-                //std::cout << "[ProceedM1]: mcounter = " << mcounter << std::endl;
-                //if (mcounter < greeting.size())
-                {
-                    PublishSubscribe::Notification request;
-                    request.set_content(std::to_string(mcounter));
-                    responder->Write(request, (void*)this);
-                    ++mcounter;
-                }
-                //else
-                //{
-                //    responder->WritesDone((void*)this);
-                //    std::cout << "[ProceedM1]: changing state to reading" << std::endl;
-                //    writing_mode_ = false;
-                //    return;
-                //}
+                request.set_content(std::to_string(mcounter));
+                responder->Write(request, this);
+                ++mcounter;
+                std::cout << request.content() << ' ';
             }
             else//reading mode
             {
                 std::cout << "[ProceedM1]: trying finish" << std::endl;
-                responder->Finish(&status, (void*)this);
+                responder->Finish(&status, this);
                 callStatus = FINISH;
             }
         }
         else if (callStatus == FINISH)
         {
-            //assert(!reply.message().empty());
-            //printReply("ProceedM1");
-            //std::cout << "[ProceedM1]: Good Bye" << std::endl;
             delete this;
         }
         return;
@@ -89,12 +76,10 @@ public:
     }
 
 
-
     void GladToSeeYou()
     {
         new AsyncClientCallM1(cq_, stub_);
     }
-
 
 
     void AsyncCompleteRpc()

@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>
 #include <deque>
+#include <cassert>
 
 
 using grpc::Server;
@@ -56,7 +57,7 @@ public:
 private:
     class CallData {
     public:
-        virtual void Proceed() = 0;
+        virtual void Proceed(bool ok) = 0;
     };
     // Class encompasing the state and logic needed to serve a request.
     class ObserverCallData : public CallData {
@@ -64,15 +65,14 @@ private:
         // Take in the "service" instance (in this case representing an asynchronous
         // server) and the completion queue "cq" used for asynchronous communication
         // with the gRPC runtime.
-        ObserverCallData(ServerImpl* parent) //PublishSubscribe::NotificationObserver::AsyncService* service, ServerCompletionQueue* cq)
-            //: service_(service), cq_(cq)
+        ObserverCallData(ServerImpl* parent)
             : parent_(parent)
             , responder_(&ctx_), status_(CREATE) {
             // Invoke the serving logic right away.
-            Proceed();
+            Proceed(true);
         }
 
-        void Proceed() override {
+        void Proceed(bool ok) override {
             if (status_ == CREATE) {
                 // Make this instance progress to the PROCESS state.
                 status_ = PROCESS;
@@ -89,24 +89,34 @@ private:
                 // Spawn a new CallData instance to serve new clients while we process
                 // the one for this CallData. The instance will deallocate itself as
                 // part of its FINISH state.
-                new ObserverCallData(parent_);
+                if (!started_)
+                {
+                    new ObserverCallData(parent_);
+                    started_ = true;
+                }
+                else
+                {
+                    //assert(!request_.content().empty());
+                    parent_->observer_(request_);
+                }
 
-                // TODO
+
                 // The actual processing.
 
-                request_.Clear();
-                responder_.Read(&request_, this);
+                if (!ok)
+                {
+                    std::cout << "[ProceedM1]: Sending reply" << std::endl;
+                    status_ = FINISH;
+                    responder_.Finish(reply_, Status(), this);
+                }
+                else
+                {
+                    request_.Clear();
+                    responder_.Read(&request_, this);
 
-                parent_->observer_(request_);
-
-                // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
-                status_ = PUSH_TO_BACK;
-
-                // And we are done! Let the gRPC runtime know we've finished, using the
-                // memory address of this instance as the uniquely identifying tag for
-                // the event.
-                //status_ = FINISH;
-                //responder_.Finish(reply_, Status::OK, this);
+                    // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
+                    status_ = PUSH_TO_BACK;
+                }
             }
             else if (status_ == PUSH_TO_BACK)
             {
@@ -121,11 +131,8 @@ private:
         }
 
     private:
-        // The means of communication with the gRPC runtime for an asynchronous
-        // server.
-        //PublishSubscribe::NotificationObserver::AsyncService* service_;
+        // The means of communication with the gRPC runtime for an asynchronous server.
         // The producer-consumer queue where for asynchronous server notifications.
-        //ServerCompletionQueue* cq_;
 
         ServerImpl* parent_;
 
@@ -138,10 +145,9 @@ private:
         PublishSubscribe::Notification request_;
 
         // What we send back to the client.
-        //google::protobuf::Empty reply_;
+        google::protobuf::Empty reply_;
 
         // The means to get back to the client.
-        //ServerAsyncResponseWriter<HelloReply> responder_;
         grpc::ServerAsyncReader<google::protobuf::Empty, PublishSubscribe::Notification> responder_;
 
         // Let's implement a tiny state machine with the following states.
@@ -149,6 +155,8 @@ private:
         CallStatus status_;  // The current serving state.
 
         grpc::Alarm alarm_;
+
+        bool started_ = false;
     };
 
 
@@ -158,21 +166,20 @@ private:
         // Take in the "service" instance (in this case representing an asynchronous
         // server) and the completion queue "cq" used for asynchronous communication
         // with the gRPC runtime.
-        SubscriberCallData(ServerImpl* parent) //PublishSubscribe::NotificationSubscriber::AsyncService* service, ServerCompletionQueue* cq)
-            //: service_(service), cq_(cq)
+        SubscriberCallData(ServerImpl* parent)
             : parent_(parent)
             , responder_(&ctx_), status_(CREATE) {
             // Invoke the serving logic right away.
-            Proceed();
+            Proceed(true);
         }
 
         ~SubscriberCallData()
         {
-            if (connected_)
+            if (started_)
                 parent_->observer_.disconnect(MakeDelegate<&SubscriberCallData::HandleNotification>(this));
         }
 
-        void Proceed() override {
+        void Proceed(bool ok) override {
             if (status_ == CREATE) {
                 // Make this instance progress to the PROCESS state.
                 status_ = PROCESS;
@@ -190,20 +197,28 @@ private:
                 // Spawn a new CallData instance to serve new clients while we process
                 // the one for this CallData. The instance will deallocate itself as
                 // part of its FINISH state.
-                new SubscriberCallData(parent_);
-
-                // TODO
-                // The actual processing.
-
-                // subscribe to notifications
-                if (!connected_)
+                if (!started_)
                 {
+                    new SubscriberCallData(parent_);
+
+                    // subscribe to notifications
                     parent_->observer_.connect(MakeDelegate<&SubscriberCallData::HandleNotification>(this));
-                    connected_ = true;
+
+                    started_ = true;
                 }
+
+                // The actual processing.
 
                 response_.Clear();
 
+                // AsyncNotifyWhenDone?
+                //if (ctx_.IsCancelled())
+                //{
+                //    std::cout << "[Proceed1M]: Trying finish" << std::endl;
+                //    status_ = FINISH;
+                //    responder_.Finish(Status(), this);
+                //}
+                //else 
                 if (!fifo_.empty())
                 {
                     response_ = fifo_.front();
@@ -216,16 +231,8 @@ private:
                 else
                 {
                     // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
-                    //grpc::Alarm alarm;
-                    //alarm.Set(parent_->cq_.get(), std::chrono::system_clock::now(), this);
                     alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
                 }
-
-                // And we are done! Let the gRPC runtime know we've finished, using the
-                // memory address of this instance as the uniquely identifying tag for
-                // the event.
-                //status_ = FINISH;
-                //responder_.Finish(reply_, Status::OK, this);
             }
             else if (status_ == PUSH_TO_BACK)
             {
@@ -245,12 +252,8 @@ private:
         }
 
     private:
-        // The means of communication with the gRPC runtime for an asynchronous
-        // server.
-        //PublishSubscribe::NotificationSubscriber::AsyncService* service_;
+        // The means of communication with the gRPC runtime for an asynchronous server.
         // The producer-consumer queue where for asynchronous server notifications.
-        //ServerCompletionQueue* cq_;
-
         ServerImpl* parent_;
 
         // Context for the rpc, allowing to tweak aspects of it such as the use
@@ -260,24 +263,22 @@ private:
 
         // What we get from the client.
         PublishSubscribe::NotificationChannel request_;
-        // What we send back to the client.
-        //HelloReply reply_;
 
+        // What we send back to the client.
         PublishSubscribe::Notification response_;
 
         // The means to get back to the client.
-        //ServerAsyncResponseWriter<HelloReply> responder_;
         grpc::ServerAsyncWriter<PublishSubscribe::Notification> responder_;
 
         // Let's implement a tiny state machine with the following states.
         enum CallStatus { CREATE, PROCESS, FINISH, PUSH_TO_BACK };
         CallStatus status_;  // The current serving state.
 
-        bool connected_ = false;
-
         std::deque<PublishSubscribe::Notification> fifo_;
 
         grpc::Alarm alarm_;
+
+        bool started_ = false;
     };
 
 
@@ -286,8 +287,8 @@ private:
     // This can be run in multiple threads if needed.
     void HandleRpcs() {
         // Spawn a new CallData instance to serve new clients.
-        new ObserverCallData(this);// &observerService_, cq_.get());
-        new SubscriberCallData(this);// &subscriberService_, cq_.get());
+        new ObserverCallData(this);
+        new SubscriberCallData(this);
         void* tag;  // uniquely identifies a request.
         bool ok;
         while (true) {
@@ -298,7 +299,7 @@ private:
             // tells us whether there is any kind of event or cq_ is shutting down.
             GPR_ASSERT(cq_->Next(&tag, &ok));
             //GPR_ASSERT(ok);
-            static_cast<CallData*>(tag)->Proceed();
+            static_cast<CallData*>(tag)->Proceed(ok);
         }
     }
 
