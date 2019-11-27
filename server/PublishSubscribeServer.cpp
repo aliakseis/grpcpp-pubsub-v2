@@ -89,17 +89,14 @@ private:
                 // Spawn a new CallData instance to serve new clients while we process
                 // the one for this CallData. The instance will deallocate itself as
                 // part of its FINISH state.
+
+                const bool wasStarted = started_;
+
                 if (!started_)
                 {
                     new ObserverCallData(parent_);
                     started_ = true;
                 }
-                else
-                {
-                    //assert(!request_.content().empty());
-                    parent_->observer_(request_);
-                }
-
 
                 // The actual processing.
 
@@ -111,7 +108,16 @@ private:
                 }
                 else
                 {
+                    if (wasStarted)
+                    {
+                        if (request_.IsInitialized())
+                        {
+                            parent_->observer_(request_);
+                        }
+                    }
+
                     request_.Clear();
+                    //PublishSubscribe::Notification().Swap(&request_);
                     responder_.Read(&request_, this);
 
                     // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
@@ -223,6 +229,9 @@ private:
                 {
                     response_ = fifo_.front();
                     fifo_.pop_front();
+
+                    response_.set_content("n_" + response_.content());
+
                     responder_.Write(response_, this);
 
                     // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
