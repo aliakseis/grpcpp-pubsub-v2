@@ -110,10 +110,7 @@ private:
                 {
                     if (wasStarted)
                     {
-                        if (request_.IsInitialized())
-                        {
-                            parent_->observer_(request_);
-                        }
+                        parent_->observer_(request_);
                     }
 
                     request_.Clear();
@@ -126,8 +123,17 @@ private:
             }
             else if (status_ == PUSH_TO_BACK)
             {
-                status_ = PROCESS;
-                alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                if (!ok)
+                {
+                    std::cout << "[ProceedM1]: Sending reply" << std::endl;
+                    status_ = FINISH;
+                    responder_.Finish(reply_, Status(), this);
+                }
+                else
+                {
+                    status_ = PROCESS;
+                    alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                }
             }
             else {
                 GPR_ASSERT(status_ == FINISH);
@@ -218,19 +224,18 @@ private:
                 response_.Clear();
 
                 // AsyncNotifyWhenDone?
-                //if (ctx_.IsCancelled())
-                //{
-                //    std::cout << "[Proceed1M]: Trying finish" << std::endl;
-                //    status_ = FINISH;
-                //    responder_.Finish(Status(), this);
-                //}
-                //else 
-                if (!fifo_.empty())
+                if (!ok)
+                {
+                    std::cout << "[Proceed1M]: Trying finish" << std::endl;
+                    status_ = FINISH;
+                    responder_.Finish(Status(), this);
+                }
+                else if (!fifo_.empty())
                 {
                     response_ = fifo_.front();
                     fifo_.pop_front();
 
-                    response_.set_content("n_" + response_.content());
+                    //response_.set_content("n_" + response_.content());
 
                     responder_.Write(response_, this);
 
@@ -245,8 +250,17 @@ private:
             }
             else if (status_ == PUSH_TO_BACK)
             {
-                status_ = PROCESS;
-                alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                if (!ok)
+                {
+                    std::cout << "[Proceed1M]: Trying finish" << std::endl;
+                    status_ = FINISH;
+                    responder_.Finish(Status(), this);
+                }
+                else
+                {
+                    status_ = PROCESS;
+                    alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                }
             }
             else {
                 GPR_ASSERT(status_ == FINISH);
