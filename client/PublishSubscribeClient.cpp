@@ -52,7 +52,7 @@ class AsyncClientCall1M
     ClientContext context;
     PublishSubscribe::Notification reply;
     Status status{};
-    enum CallStatus { PROCESS, FINISH, DESTROY } callStatus;
+    enum CallStatus { START, PROCESS, FINISH, DESTROY } callStatus;
     std::unique_ptr< grpc::ClientAsyncReader<PublishSubscribe::Notification> > responder;
 
 public:
@@ -63,7 +63,7 @@ public:
         std::cout << "[Proceed1M]: new client 1-M" << std::endl;
         responder = stub_->AsyncSubscribe(&context, request, &cq_, this);
         terminator.connect(MakeDelegate<&ClientContext::TryCancel>(&context));
-        callStatus = PROCESS;
+        callStatus = START;
     }
     ~AsyncClientCall1M()
     {
@@ -71,21 +71,26 @@ public:
     }
     void Proceed(bool ok = true)
     {
-        if (callStatus == PROCESS)
+        switch (callStatus)
         {
+        case PROCESS:
+            // handle result
+            std::cout << reply.content() << ','; // falls through
+        case START:
             if (!ok)
             {
                 responder->Finish(&status, this);
                 callStatus = FINISH;
                 return;
             }
+            callStatus = PROCESS;
+            reply.Clear();
             responder->Read(&reply, this);
-            std::cout << reply.content() << ',';
-        }
-        else if (callStatus == FINISH)
-        {
+            break;
+        case FINISH:
             std::cout << "[Proceed1M]: Good Bye" << std::endl;
             delete this;
+            break;
         }
     }
 };
