@@ -1,3 +1,5 @@
+#include "PublishSubscribeServer.h"
+
 #include <grpcpp/grpcpp.h>
 #include <grpc/support/log.h>
 #include <grpcpp/alarm.h>
@@ -24,7 +26,20 @@ using grpc::ServerCompletionQueue;
 using grpc::Status;
 
 
-class ServerImpl final {
+namespace {
+
+
+PublishSubscribe::Notification AsNotification(const PlainNotification& src)
+{
+    PublishSubscribe::Notification result;
+#define AS_PLAIN_NOTIFICATION_MACRO(type, name) result.set_##name(src.name);
+    NOTIFICATION_X(AS_PLAIN_NOTIFICATION_MACRO)
+#undef AS_PLAIN_NOTIFICATION_MACRO
+    return result;
+}
+
+
+class ServerImpl final : public IPublishSubscribeServer {
 public:
     ~ServerImpl() {
         server_->Shutdown();
@@ -33,25 +48,30 @@ public:
     }
 
     // There is no shutdown handling in this code.
-    void Run() {
-        std::string server_address("0.0.0.0:50051");
+    void Run(const std::string& serverIpAddress) override {
+        //std::string server_address("0.0.0.0:50051");
 
         ServerBuilder builder;
         // Listen on the given address without any authentication mechanism.
-        builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+        builder.AddListeningPort(serverIpAddress, grpc::InsecureServerCredentials());
         // Register "service_" as the instance through which we'll communicate with
         // clients. In this case it corresponds to an *asynchronous* service.
-        builder.RegisterService(&observerService_);
+        //builder.RegisterService(&observerService_);
         builder.RegisterService(&subscriberService_);
         // Get hold of the completion queue used for the asynchronous communication
         // with the gRPC runtime.
         cq_ = builder.AddCompletionQueue();
         // Finally assemble the server.
         server_ = builder.BuildAndStart();
-        std::cout << "Server listening on " << server_address << std::endl;
+        //std::cout << "Server listening on " << server_address << std::endl;
 
         // Proceed to the server's main loop.
         HandleRpcs();
+    }
+
+    void Push(const PlainNotification& notification) override
+    {
+        observer_(notification);
     }
 
 private:
@@ -59,6 +79,8 @@ private:
     public:
         virtual void Proceed(bool ok) = 0;
     };
+
+#if 0
     // Class encompasing the state and logic needed to serve a request.
     class ObserverCallData : public CallData {
     public:
@@ -170,7 +192,7 @@ private:
 
         bool started_ = false;
     };
-
+#endif
 
     // Class encompasing the state and logic needed to serve a request.
     class SubscriberCallData : public CallData {
@@ -202,8 +224,7 @@ private:
                 // instances can serve different requests concurrently), in this case
                 // the memory address of this CallData instance.
                 auto cq = parent_->cq_.get();
-                parent_->subscriberService_.RequestSubscribe(&ctx_, &request_, &responder_, cq, cq,
-                    this);
+                parent_->subscriberService_.RequestSubscribe(&ctx_, &request_, &responder_, cq, cq, this);
             }
             else if (status_ == PROCESS) {
                 // Spawn a new CallData instance to serve new clients while we process
@@ -226,33 +247,41 @@ private:
                 // AsyncNotifyWhenDone?
                 if (!ok)
                 {
-                    std::cout << "[Proceed1M]: Trying finish" << std::endl;
+                    //std::cout << "[Proceed1M]: Trying finish" << std::endl;
                     status_ = FINISH;
                     responder_.Finish(Status(), this);
                 }
-                else if (!fifo_.empty())
-                {
-                    response_ = fifo_.front();
-                    fifo_.pop_front();
-
-                    //response_.set_content("n_" + response_.content());
-
-                    responder_.Write(response_, this);
-
-                    // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
-                    status_ = PUSH_TO_BACK;
-                }
                 else
                 {
-                    // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
-                    alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                    bool hasNotification = false;
+                    {
+                        std::lock_guard<std::mutex> locker(fifoMutex_);
+                        if (!fifo_.empty())
+                        {
+                            hasNotification = true;
+                            response_ = AsNotification(fifo_.front());
+                            fifo_.pop_front();
+                        }
+                    }
+
+                    if (hasNotification)
+                    {
+                        responder_.Write(response_, this);
+                        // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
+                        status_ = PUSH_TO_BACK;
+                    }
+                    else
+                    {
+                        // https://www.gresearch.co.uk/2019/03/20/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
+                        alarm_.Set(parent_->cq_.get(), gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), this);
+                    }
                 }
             }
             else if (status_ == PUSH_TO_BACK)
             {
                 if (!ok)
                 {
-                    std::cout << "[Proceed1M]: Trying finish" << std::endl;
+                    //std::cout << "[Proceed1M]: Trying finish" << std::endl;
                     status_ = FINISH;
                     responder_.Finish(Status(), this);
                 }
@@ -269,8 +298,9 @@ private:
             }
         }
 
-        void HandleNotification(const PublishSubscribe::Notification& notification)
+        void HandleNotification(const PlainNotification& notification)
         {
+            std::lock_guard<std::mutex> locker(fifoMutex_);
             fifo_.push_back(notification);
         }
 
@@ -297,7 +327,8 @@ private:
         enum CallStatus { CREATE, PROCESS, FINISH, PUSH_TO_BACK };
         CallStatus status_;  // The current serving state.
 
-        std::deque<PublishSubscribe::Notification> fifo_;
+        std::deque<PlainNotification> fifo_;
+        std::mutex fifoMutex_;
 
         grpc::Alarm alarm_;
 
@@ -310,7 +341,7 @@ private:
     // This can be run in multiple threads if needed.
     void HandleRpcs() {
         // Spawn a new CallData instance to serve new clients.
-        new ObserverCallData(this);
+        //new ObserverCallData(this);
         new SubscriberCallData(this);
         void* tag;  // uniquely identifies a request.
         bool ok;
@@ -327,16 +358,26 @@ private:
     }
 
     std::unique_ptr<ServerCompletionQueue> cq_;
-    PublishSubscribe::NotificationObserver::AsyncService observerService_;
+    //PublishSubscribe::NotificationObserver::AsyncService observerService_;
     PublishSubscribe::NotificationSubscriber::AsyncService subscriberService_;
     std::unique_ptr<Server> server_;
 
-    boost::signals2::signal<void(const PublishSubscribe::Notification&)> observer_;
+    boost::signals2::signal<void(const PlainNotification&)> observer_;
 };
 
-int main(int argc, char** argv) {
-    ServerImpl server;
-    server.Run();
 
-    return 0;
+} // namespace
+
+
+std::unique_ptr<IPublishSubscribeServer> MakePublishSubscribeServer()
+{
+    return std::make_unique<ServerImpl>();
 }
+
+
+//int main(int argc, char** argv) {
+//    ServerImpl server;
+//    server.Run("0.0.0.0:50051");
+//
+//    return 0;
+//}

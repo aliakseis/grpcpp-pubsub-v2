@@ -50,29 +50,40 @@ add_custom_command(
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-add_executable(PublishSubscribeServer
-               server/PublishSubscribeServer.cpp
+add_library(PublishSubscribeServerLib STATIC
+               serverlib/PublishSubscribeServer.cpp
                ${PROTO_SRCS}
                ${GRPC_SRCS})
-target_include_directories(PublishSubscribeServer PRIVATE ./server ./common)
-target_link_libraries(PublishSubscribeServer
+target_include_directories(PublishSubscribeServerLib PRIVATE ./serverlib ./common)
+target_link_libraries(PublishSubscribeServerLib
                       ${GRPC_CPP_LIB}
                       ${Protobuf_LIBRARIES})
+
+add_library(PublishSubscribeClientLib STATIC
+               clientlib/PublishSubscribeClient.cpp
+               ${PROTO_SRCS}
+               ${GRPC_SRCS})
+target_include_directories(PublishSubscribeClientLib PRIVATE ./clientlib ./common)
+target_link_libraries(PublishSubscribeClientLib
+                      ${GRPC_CPP_LIB}
+                      ${Protobuf_LIBRARIES})
+
+
+
+add_executable(PublishSubscribeServer
+               server/main.cpp)
+target_include_directories(PublishSubscribeServer PRIVATE ./server ./serverlib ./common)
+target_link_libraries(PublishSubscribeServer
+                      PublishSubscribeServerLib)
+#                      ${GRPC_CPP_LIB}
+#                      ${Protobuf_LIBRARIES})
 
 add_executable(PublishSubscribeClient
-               client/PublishSubscribeClient.cpp
-               ${PROTO_SRCS}
-               ${GRPC_SRCS})
-target_include_directories(PublishSubscribeClient PRIVATE ./client ./common)
+               client/main.cpp)
+target_include_directories(PublishSubscribeClient PRIVATE ./client ./clientlib ./common)
 target_link_libraries(PublishSubscribeClient
-                      ${GRPC_CPP_LIB}
-                      ${Protobuf_LIBRARIES})
+                      PublishSubscribeClientLib)
+#                      ${GRPC_CPP_LIB}
+#                      ${Protobuf_LIBRARIES})
 
-add_executable(PublishSubscribeNotifier
-               notifier/PublishSubscribeNotifier.cpp
-               ${PROTO_SRCS}
-               ${GRPC_SRCS})
-target_include_directories(PublishSubscribeNotifier PRIVATE ./notifier ./common)
-target_link_libraries(PublishSubscribeNotifier
-                      ${GRPC_CPP_LIB}
-                      ${Protobuf_LIBRARIES})
+

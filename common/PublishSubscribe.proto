@@ -6,16 +6,17 @@ package PublishSubscribe;
 import "google/protobuf/empty.proto";
 
 
-service NotificationObserver {
-	rpc Notify(stream Notification) returns (google.protobuf.Empty) {}
-}
+//service NotificationObserver {
+//	rpc Notify(stream Notification) returns (google.protobuf.Empty) {}
+//}
 
 service NotificationSubscriber {
 	rpc Subscribe(NotificationChannel) returns (stream Notification) {}
 }
 
 message Notification {
-	string content = 1;
+	uint64 index = 1;
+	string content = 2;
 }
 
 message NotificationChannel {
