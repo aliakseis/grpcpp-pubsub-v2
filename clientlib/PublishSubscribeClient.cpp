@@ -23,27 +23,6 @@ using grpc::CompletionQueue;
 using grpc::Status;
 
 
-//boost::signals2::signal<void(void)> terminator;
-//
-//void signalHandler(int signo)
-//{
-//    terminator();
-//}
-//
-//
-//void setSignalHandler()
-//{
-//#ifdef _WIN32
-//    signal(SIGINT, signalHandler);
-//#else
-//    struct sigaction sa;
-//    sa.sa_handler = signalHandler;
-//    sigemptyset(&sa.sa_mask);
-//    sa.sa_flags = 0;
-//    sigaction(SIGINT, &sa, NULL);
-//#endif
-//}
-
 
 namespace {
 
@@ -60,6 +39,58 @@ PlainNotification AsPlainNotification(const PublishSubscribe::Notification& src)
 }
 
 
+//////////////////////////////////////////////////////////////////////////////
+
+class GreeterClient : public IPublishSubscribeClient
+{
+public:
+    explicit GreeterClient(
+        std::shared_ptr<Channel> channel, const std::string& id,
+        PublishSubscribeClientCallback callback)
+        : stub_(PublishSubscribe::NotificationSubscriber::NewStub(channel))
+        , callback_(callback)
+    {
+        GladToSeeMe(id);
+        thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, this);
+    }
+    ~GreeterClient()
+    {
+        std::cout << "In " << __FUNCTION__ << '\n';
+        thread_.join();
+    }
+
+    void TryCancel() override
+    {
+        terminator_();
+    }
+
+private:
+    void GladToSeeMe(const std::string& id);
+    void AsyncCompleteRpc();
+
+private:
+    friend class AsyncClientCall1M;
+    // Out of the passed in Channel comes the stub, stored here, our view of the
+    // server's exposed services.
+    std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub> stub_;
+
+    // The producer-consumer queue we use to communicate asynchronously with the
+    // gRPC runtime.
+    CompletionQueue cq_;
+
+    PublishSubscribeClientCallback callback_;
+
+    Terminator terminator_;
+
+    std::thread thread_;
+
+    std::atomic<int> numCalls_ = 0;
+};
+
+
+//////////////////////////////////////////////////////////////////////////////
+
+
 // https://habr.com/ru/post/340758/
 // https://github.com/Mityuha/grpc_async/blob/master/grpc_async_client.cc
 
@@ -71,29 +102,31 @@ class AsyncClientCall1M
     enum CallStatus { START, PROCESS, FINISH, DESTROY } callStatus;
     std::unique_ptr< grpc::ClientAsyncReader<PublishSubscribe::Notification> > responder;
 
-    PublishSubscribeClientCallback callback_;
-    std::weak_ptr<Terminator> terminator_;
+    GreeterClient* parent_;
+
 
 public:
-    AsyncClientCall1M(const PublishSubscribe::NotificationChannel& request, 
-        CompletionQueue& cq_, 
-        std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub>& stub_,
-        PublishSubscribeClientCallback callback,
-        std::shared_ptr<Terminator> terminator)
-    : callback_(callback)
-    , terminator_(terminator)
+    AsyncClientCall1M(
+        const PublishSubscribe::NotificationChannel& request, 
+        GreeterClient* parent
+        //CompletionQueue& cq_, 
+        //std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub>& stub_,
+        //PublishSubscribeClientCallback callback,
+        //std::shared_ptr<Terminator> terminator
+    )
+    //: callback_(callback)
+    : parent_(parent)
     {
+        ++parent_->numCalls_;
         //std::cout << "[Proceed1M]: new client 1-M" << std::endl;
-        responder = stub_->AsyncSubscribe(&context, request, &cq_, this);
-        terminator->connect(MakeDelegate<&ClientContext::TryCancel>(&context));
+        responder = parent_->stub_->AsyncSubscribe(&context, request, &parent_->cq_, this);
+        parent_->terminator_.connect(MakeDelegate<&ClientContext::TryCancel>(&context));
         callStatus = START;
     }
     ~AsyncClientCall1M()
     {
-        if (auto obj = terminator_.lock())
-        {
-            obj->disconnect(MakeDelegate<&ClientContext::TryCancel>(&context));
-        }
+        parent_->terminator_.disconnect(MakeDelegate<&ClientContext::TryCancel>(&context));
+        --parent_->numCalls_;
     }
 
     void Proceed(bool ok = true)
@@ -105,7 +138,7 @@ public:
             // falls through
             if (ok)
             {
-                callback_(AsPlainNotification(reply));
+                parent_->callback_(AsPlainNotification(reply));
             }
         case START:
             if (!ok)
@@ -119,7 +152,7 @@ public:
             responder->Read(&reply, this);
             break;
         case FINISH:
-            //std::cout << "[Proceed1M]: Good Bye" << std::endl;
+            std::cout << "[Proceed1M]: Good Bye" << std::endl;
             delete this;
             break;
         }
@@ -127,65 +160,33 @@ public:
 };
 
 
-class GreeterClient : public IPublishSubscribeClient
+//////////////////////////////////////////////////////////////////////////////
+
+
+
+
+void GreeterClient::GladToSeeMe(const std::string& id)
 {
-public:
-    explicit GreeterClient(
-        std::shared_ptr<Channel> channel, const std::string& id,
-        PublishSubscribeClientCallback callback)
-    : stub_(PublishSubscribe::NotificationSubscriber::NewStub(channel))
-    , callback_(callback)
-    , terminator_(std::make_shared<Terminator>())
+    PublishSubscribe::NotificationChannel request;
+    request.set_id(id);
+    new AsyncClientCall1M(request, this);// cq_, stub_, callback_, terminator_);
+}
+
+
+void GreeterClient::AsyncCompleteRpc()
+{
+    void* got_tag;
+    bool ok = false;
+    while (cq_.Next(&got_tag, &ok))
     {
-        GladToSeeMe(id);
-        thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, this);
+        AsyncClientCall1M* call = static_cast<AsyncClientCall1M*>(got_tag);
+        call->Proceed(ok);
+        if (numCalls_ == 0)
+            break;
     }
-    ~GreeterClient()
-    {
-        thread_.join();
-    }
+    std::cout << "Completion queue is shutting down." << std::endl;
+}
 
-    void TryCancel() override
-    {
-        (*terminator_)();
-    }
-
-private:
-    void GladToSeeMe(const std::string& id)
-    {
-        PublishSubscribe::NotificationChannel request;
-        request.set_id(id);
-        new AsyncClientCall1M(request, cq_, stub_, callback_, terminator_);
-    }
-
-
-    void AsyncCompleteRpc()
-    {
-        void* got_tag;
-        bool ok = false;
-        while (cq_.Next(&got_tag, &ok))
-        {
-            AsyncClientCall1M* call = static_cast<AsyncClientCall1M*>(got_tag);
-            call->Proceed(ok);
-        }
-        std::cout << "Completion queue is shutting down." << std::endl;
-    }
-
-private:
-    // Out of the passed in Channel comes the stub, stored here, our view of the
-    // server's exposed services.
-    std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub> stub_;
-
-    // The producer-consumer queue we use to communicate asynchronously with the
-    // gRPC runtime.
-    CompletionQueue cq_;
-
-    PublishSubscribeClientCallback callback_;
-
-    std::shared_ptr<Terminator> terminator_;
-
-    std::thread thread_;
-};
 
 } // namespace
 
