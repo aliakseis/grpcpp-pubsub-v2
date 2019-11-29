@@ -41,33 +41,26 @@ PublishSubscribe::Notification AsNotification(const PlainNotification& src)
 
 class ServerImpl final : public IPublishSubscribeServer {
 public:
+    ServerImpl(const std::string& serverIpAddress) {
+        thread_ = std::thread([this, serverIpAddress] { Run(serverIpAddress); });
+    }
+
     ~ServerImpl() {
+        shutdownFlag_ = true;
+
         server_->Shutdown();
         // Always shutdown the completion queue after the server.
         cq_->Shutdown();
+
+        // join
+        thread_.join();
+
+        // drain the queue
+        void* ignoredTag = nullptr;
+        bool ok = false;
+        while (cq_->Next(&ignoredTag, &ok));
     }
 
-    // There is no shutdown handling in this code.
-    void Run(const std::string& serverIpAddress) override {
-        //std::string server_address("0.0.0.0:50051");
-
-        ServerBuilder builder;
-        // Listen on the given address without any authentication mechanism.
-        builder.AddListeningPort(serverIpAddress, grpc::InsecureServerCredentials());
-        // Register "service_" as the instance through which we'll communicate with
-        // clients. In this case it corresponds to an *asynchronous* service.
-        //builder.RegisterService(&observerService_);
-        builder.RegisterService(&subscriberService_);
-        // Get hold of the completion queue used for the asynchronous communication
-        // with the gRPC runtime.
-        cq_ = builder.AddCompletionQueue();
-        // Finally assemble the server.
-        server_ = builder.BuildAndStart();
-        //std::cout << "Server listening on " << server_address << std::endl;
-
-        // Proceed to the server's main loop.
-        HandleRpcs();
-    }
 
     void Push(const PlainNotification& notification) override
     {
@@ -119,6 +112,12 @@ private:
                 // part of its FINISH state.
                 if (!started_)
                 {
+                    if (!ok)
+                    {
+                        delete this;
+                        return;
+                    }
+
                     new SubscriberCallData(parent_);
 
                     // subscribe to notifications
@@ -223,6 +222,27 @@ private:
     };
 
 
+    // There is no shutdown handling in this code.
+    void Run(const std::string& serverIpAddress) {
+        //std::string server_address("0.0.0.0:50051");
+
+        ServerBuilder builder;
+        // Listen on the given address without any authentication mechanism.
+        builder.AddListeningPort(serverIpAddress, grpc::InsecureServerCredentials());
+        // Register "service_" as the instance through which we'll communicate with
+        // clients. In this case it corresponds to an *asynchronous* service.
+        //builder.RegisterService(&observerService_);
+        builder.RegisterService(&subscriberService_);
+        // Get hold of the completion queue used for the asynchronous communication
+        // with the gRPC runtime.
+        cq_ = builder.AddCompletionQueue();
+        // Finally assemble the server.
+        server_ = builder.BuildAndStart();
+        //std::cout << "Server listening on " << server_address << std::endl;
+
+        // Proceed to the server's main loop.
+        HandleRpcs();
+    }
 
 
     // This can be run in multiple threads if needed.
@@ -232,15 +252,14 @@ private:
         new SubscriberCallData(this);
         void* tag;  // uniquely identifies a request.
         bool ok;
-        while (true) {
+        while (cq_->Next(&tag, &ok)) {
             // Block waiting to read the next event from the completion queue. The
             // event is uniquely identified by its tag, which in this case is the
             // memory address of a CallData instance.
             // The return value of Next should always be checked. This return value
             // tells us whether there is any kind of event or cq_ is shutting down.
-            GPR_ASSERT(cq_->Next(&tag, &ok));
             //GPR_ASSERT(ok);
-            static_cast<CallData*>(tag)->Proceed(ok);
+            static_cast<CallData*>(tag)->Proceed(ok && !shutdownFlag_);
         }
     }
 
@@ -249,6 +268,10 @@ private:
     PublishSubscribe::NotificationSubscriber::AsyncService subscriberService_;
     std::unique_ptr<Server> server_;
 
+    std::thread thread_;
+
+    std::atomic_bool shutdownFlag_ = false;
+
     boost::signals2::signal<void(const PlainNotification&)> observer_;
 };
 
@@ -256,9 +279,9 @@ private:
 } // namespace
 
 
-std::unique_ptr<IPublishSubscribeServer> MakePublishSubscribeServer()
+std::unique_ptr<IPublishSubscribeServer> MakePublishSubscribeServer(const std::string& serverIpAddress)
 {
-    return std::make_unique<ServerImpl>();
+    return std::make_unique<ServerImpl>(serverIpAddress);
 }
 
 

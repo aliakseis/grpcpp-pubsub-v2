@@ -102,8 +102,11 @@ public:
         {
         case PROCESS:
             // handle result
-            //std::cout << reply.content() << ','; // falls through
-            callback_(AsPlainNotification(reply));
+            // falls through
+            if (ok)
+            {
+                callback_(AsPlainNotification(reply));
+            }
         case START:
             if (!ok)
             {
