@@ -55,7 +55,6 @@ public:
     }
     ~GreeterClient()
     {
-        std::cout << "In " << __FUNCTION__ << '\n';
         thread_.join();
     }
 
@@ -104,21 +103,14 @@ class AsyncClientCall1M
 
     GreeterClient* parent_;
 
-
 public:
     AsyncClientCall1M(
         const PublishSubscribe::NotificationChannel& request, 
         GreeterClient* parent
-        //CompletionQueue& cq_, 
-        //std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub>& stub_,
-        //PublishSubscribeClientCallback callback,
-        //std::shared_ptr<Terminator> terminator
     )
-    //: callback_(callback)
     : parent_(parent)
     {
         ++parent_->numCalls_;
-        //std::cout << "[Proceed1M]: new client 1-M" << std::endl;
         responder = parent_->stub_->AsyncSubscribe(&context, request, &parent_->cq_, this);
         parent_->terminator_.connect(MakeDelegate<&ClientContext::TryCancel>(&context));
         callStatus = START;
@@ -152,7 +144,6 @@ public:
             responder->Read(&reply, this);
             break;
         case FINISH:
-            std::cout << "[Proceed1M]: Good Bye" << std::endl;
             delete this;
             break;
         }
@@ -161,8 +152,6 @@ public:
 
 
 //////////////////////////////////////////////////////////////////////////////
-
-
 
 
 void GreeterClient::GladToSeeMe(const std::string& id)
@@ -184,7 +173,6 @@ void GreeterClient::AsyncCompleteRpc()
         if (numCalls_ == 0)
             break;
     }
-    std::cout << "Completion queue is shutting down." << std::endl;
 }
 
 

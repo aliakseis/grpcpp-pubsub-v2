@@ -133,7 +133,6 @@ private:
                 // AsyncNotifyWhenDone?
                 if (!ok)
                 {
-                    //std::cout << "[Proceed1M]: Trying finish" << std::endl;
                     status_ = FINISH;
                     responder_.Finish(Status(), this);
                 }
@@ -167,7 +166,6 @@ private:
             {
                 if (!ok)
                 {
-                    //std::cout << "[Proceed1M]: Trying finish" << std::endl;
                     status_ = FINISH;
                     responder_.Finish(Status(), this);
                 }
@@ -196,8 +194,7 @@ private:
         ServerImpl* parent_;
 
         // Context for the rpc, allowing to tweak aspects of it such as the use
-        // of compression, authentication, as well as to send metadata back to the
-        // client.
+        // of compression, authentication, as well as to send metadata back to the client.
         ServerContext ctx_;
 
         // What we get from the client.
@@ -224,21 +221,18 @@ private:
 
     // There is no shutdown handling in this code.
     void Run(const std::string& serverIpAddress) {
-        //std::string server_address("0.0.0.0:50051");
 
         ServerBuilder builder;
         // Listen on the given address without any authentication mechanism.
         builder.AddListeningPort(serverIpAddress, grpc::InsecureServerCredentials());
         // Register "service_" as the instance through which we'll communicate with
         // clients. In this case it corresponds to an *asynchronous* service.
-        //builder.RegisterService(&observerService_);
         builder.RegisterService(&subscriberService_);
         // Get hold of the completion queue used for the asynchronous communication
         // with the gRPC runtime.
         cq_ = builder.AddCompletionQueue();
         // Finally assemble the server.
         server_ = builder.BuildAndStart();
-        //std::cout << "Server listening on " << server_address << std::endl;
 
         // Proceed to the server's main loop.
         HandleRpcs();
@@ -248,7 +242,6 @@ private:
     // This can be run in multiple threads if needed.
     void HandleRpcs() {
         // Spawn a new CallData instance to serve new clients.
-        //new ObserverCallData(this);
         new SubscriberCallData(this);
         void* tag;  // uniquely identifies a request.
         bool ok;
@@ -264,7 +257,6 @@ private:
     }
 
     std::unique_ptr<ServerCompletionQueue> cq_;
-    //PublishSubscribe::NotificationObserver::AsyncService observerService_;
     PublishSubscribe::NotificationSubscriber::AsyncService subscriberService_;
     std::unique_ptr<Server> server_;
 
@@ -283,11 +275,3 @@ std::unique_ptr<IPublishSubscribeServer> MakePublishSubscribeServer(const std::s
 {
     return std::make_unique<ServerImpl>(serverIpAddress);
 }
-
-
-//int main(int argc, char** argv) {
-//    ServerImpl server;
-//    server.Run("0.0.0.0:50051");
-//
-//    return 0;
-//}
