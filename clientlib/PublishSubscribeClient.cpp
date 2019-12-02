@@ -41,19 +41,19 @@ PlainNotification AsPlainNotification(const PublishSubscribe::Notification& src)
 
 //////////////////////////////////////////////////////////////////////////////
 
-class GreeterClient : public IPublishSubscribeClient
+class PublishSubscribeClient : public IPublishSubscribeClient
 {
 public:
-    explicit GreeterClient(
+    explicit PublishSubscribeClient(
         std::shared_ptr<Channel> channel, const std::string& id,
         PublishSubscribeClientCallback callback)
         : stub_(PublishSubscribe::NotificationSubscriber::NewStub(channel))
         , callback_(callback)
     {
-        GladToSeeMe(id);
-        thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, this);
+        RequestNotification(id);
+        thread_ = std::thread(&PublishSubscribeClient::AsyncCompleteRpc, this);
     }
-    ~GreeterClient()
+    ~PublishSubscribeClient()
     {
         thread_.join();
     }
@@ -64,11 +64,11 @@ public:
     }
 
 private:
-    void GladToSeeMe(const std::string& id);
+    void RequestNotification(const std::string& id);
     void AsyncCompleteRpc();
 
 private:
-    friend class AsyncClientCall1M;
+    friend class AsyncDownstreamingClientCall;
     // Out of the passed in Channel comes the stub, stored here, our view of the
     // server's exposed services.
     std::unique_ptr<PublishSubscribe::NotificationSubscriber::Stub> stub_;
@@ -93,7 +93,7 @@ private:
 // https://habr.com/ru/post/340758/
 // https://github.com/Mityuha/grpc_async/blob/master/grpc_async_client.cc
 
-class AsyncClientCall1M
+class AsyncDownstreamingClientCall
 {
     ClientContext context;
     PublishSubscribe::Notification reply;
@@ -101,12 +101,12 @@ class AsyncClientCall1M
     enum CallStatus { START, PROCESS, FINISH, DESTROY } callStatus;
     std::unique_ptr< grpc::ClientAsyncReader<PublishSubscribe::Notification> > responder;
 
-    GreeterClient* parent_;
+    PublishSubscribeClient* parent_;
 
 public:
-    AsyncClientCall1M(
+    AsyncDownstreamingClientCall(
         const PublishSubscribe::NotificationChannel& request, 
-        GreeterClient* parent
+        PublishSubscribeClient* parent
     )
     : parent_(parent)
     {
@@ -115,7 +115,7 @@ public:
         parent_->terminator_.connect(MakeDelegate<&ClientContext::TryCancel>(&context));
         callStatus = START;
     }
-    ~AsyncClientCall1M()
+    ~AsyncDownstreamingClientCall()
     {
         parent_->terminator_.disconnect(MakeDelegate<&ClientContext::TryCancel>(&context));
         --parent_->numCalls_;
@@ -154,21 +154,21 @@ public:
 //////////////////////////////////////////////////////////////////////////////
 
 
-void GreeterClient::GladToSeeMe(const std::string& id)
+void PublishSubscribeClient::RequestNotification(const std::string& id)
 {
     PublishSubscribe::NotificationChannel request;
     request.set_id(id);
-    new AsyncClientCall1M(request, this);// cq_, stub_, callback_, terminator_);
+    new AsyncDownstreamingClientCall(request, this);// cq_, stub_, callback_, terminator_);
 }
 
 
-void GreeterClient::AsyncCompleteRpc()
+void PublishSubscribeClient::AsyncCompleteRpc()
 {
     void* got_tag;
     bool ok = false;
     while (cq_.Next(&got_tag, &ok))
     {
-        AsyncClientCall1M* call = static_cast<AsyncClientCall1M*>(got_tag);
+        AsyncDownstreamingClientCall* call = static_cast<AsyncDownstreamingClientCall*>(got_tag);
         call->Proceed(ok);
         if (numCalls_ == 0)
             break;
@@ -181,7 +181,7 @@ void GreeterClient::AsyncCompleteRpc()
 std::unique_ptr<IPublishSubscribeClient> MakePublishSubscribeClient(
     const std::string& targetIpAddress, const std::string& id, PublishSubscribeClientCallback callback)
 {
-    return std::make_unique<GreeterClient>(
+    return std::make_unique<PublishSubscribeClient>(
         grpc::CreateChannel(targetIpAddress, grpc::InsecureChannelCredentials()), 
         id,
         callback);
