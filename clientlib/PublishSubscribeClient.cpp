@@ -158,7 +158,7 @@ void PublishSubscribeClient::RequestNotification(const std::string& id)
 {
     PublishSubscribe::NotificationChannel request;
     request.set_id(id);
-    new AsyncDownstreamingClientCall(request, this);// cq_, stub_, callback_, terminator_);
+    new AsyncDownstreamingClientCall(request, this);
 }
 
 
