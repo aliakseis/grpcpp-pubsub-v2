@@ -111,6 +111,7 @@ private:
 
 class CallData {
 public:
+    virtual ~CallData() = default;
     virtual void Proceed(bool ok) = 0;
 };
 
